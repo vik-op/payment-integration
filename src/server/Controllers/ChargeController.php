@@ -5,92 +5,71 @@ declare(strict_types=1);
 /**
  * ChargeController
  * * Orchestrates the payment settlement process. 
- * High-level features:
- * - Request validation and payload sanitization.
- * - Idempotency layer to prevent race conditions and duplicate billing.
- * - Integration with external Payment Gateway SDK.
- * - Graceful error propagation and logging.
+ * Key Patterns: Idempotency, Request Validation, and Secure Gateway Communication.
  */
 
 try {
-    /**
-     * INBOUND DATA PARSING
-     * Extract raw JSON payload from the request body.
-     */
-    $input = json_decode(file_get_contents('php://input'), true);
-    
-    /**
-     * INPUT VALIDATION
-     * Verify mandatory fields: token (from Google Pay) and internal order reference.
-     * Returns a 400 Bad Request equivalent on failure.
-     */
-    if (!isset($input['token'], $input['orderId'])) {
-        throw new Exception("Incomplete payment data provided for processing.", 400);
+    // 1. Inbound Security Check: Ensure the request is AJAX
+    if (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') !== 'XMLHttpRequest') {
+        http_response_code(403);
+        die(json_encode(['error' => 'Forbidden: Direct access not allowed']));
     }
 
-    /**
-     * IDEMPOTENCY GUARD
-     * Crucial for payment systems: verify if this specific order has already been
-     * handled to prevent "Double Spend" scenarios during network retries.
-     */
-    if (isOrderProcessed($input['orderId'])) {
-        echo json_encode([
-            'success' => true, 
-            'message' => 'Idempotency Key Match: Transaction already settled.'
-        ]);
+    // 2. Data Parsing
+    $input = json_decode(file_get_contents('php://input'), true);
+    
+    // 3. Request Validation
+    if (!isset($input['token'], $input['orderId'])) {
+        http_response_code(400); // Bad Request
+        echo json_encode(['success' => false, 'error' => 'Required payment fields are missing.']);
         exit;
     }
 
     /**
-     * GATEWAY INITIALIZATION
-     * Securely instantiate the gateway client using environment variables.
-     * Credentials should never be hardcoded in the source.
+     * IDEMPOTENCY GUARD
+     * Ensures that network retries do not result in duplicate charges.
      */
+    if (isOrderProcessed($input['orderId'])) {
+        http_response_code(200);
+        echo json_encode([
+            'success' => true, 
+            'message' => 'Status Sync: Order already settled.'
+        ]);
+        exit;
+    }
+
+    // 4. Gateway Integration
+    // Securely pull API keys from the environment configuration
     $paymentGateway = new \YourGateway\SDK\Client(getenv('GATEWAY_SECRET_KEY'));
     
     /**
-     * TRANSACTION EXECUTION
-     * Perform the settlement request. We pass metadata for audit trails
-     * and anti-fraud scoring.
+     * SETTLEMENT ATTEMPT
+     * Submit the client-side token for final authorization.
      */
     $charge = $paymentGateway->charges->create([
-        'amount'   => 10000, // Denominated in the smallest unit (e.g., cents)
+        'amount'   => 10000, // Denominated in cents (e.g., $100.00)
         'currency' => 'usd',
         'source'   => $input['token'],
         'metadata' => [
             'order_id'   => $input['orderId'],
-            'risk_score' => analyzeRisk($input) // Call to internal heuristic engine
+            'risk_score' => analyzeRisk($input)
         ]
     ]);
 
-    /**
-     * POST-SETTLEMENT LOGIC
-     * If the gateway confirms success, persist the record and notify the client.
-     */
+    // 5. Post-Payment Persistence
     if ($charge->status === 'succeeded') {
         saveTransaction($input['orderId'], $charge->id, 'SUCCESS');
         echo json_encode(['success' => true]);
     }
 
 } catch (\YourGateway\Exception\ApiErrorException $e) {
-    /**
-     * GATEWAY EXCEPTION HANDLING
-     * Handle provider-specific rejections (e.g., declined cards, timeout).
-     * Logs are kept detailed for internal audits, but public messages are kept generic.
-     */
-    error_log("[Payment Service] Gateway API Exception: " . $e->getMessage());
-    echo json_encode([
-        'success' => false, 
-        'error' => 'Transaction declined. Please verify payment details.'
-    ]);
+    // 402 Payment Required: Card declined or expired
+    http_response_code(402);
+    error_log("[Payment Service] Gateway Rejection: " . $e->getMessage());
+    echo json_encode(['success' => false, 'error' => 'The payment was declined by the issuer.']);
 } catch (\Exception $e) {
-    /**
-     * SYSTEM EXCEPTION HANDLING
-     * Catch-all for logic errors or connectivity issues.
-     */
-    error_log("[Payment Service] Critical System Error: " . $e->getMessage());
-    echo json_encode([
-        'success' => false, 
-        'error' => 'An internal error occurred. Please try again later.'
-    ]);
+    // 500 Internal Server Error: System or connectivity issues
+    http_response_code(500);
+    error_log("[Payment Service] Critical Failure: " . $e->getMessage());
+    echo json_encode(['success' => false, 'error' => 'An internal server error occurred.']);
 }
