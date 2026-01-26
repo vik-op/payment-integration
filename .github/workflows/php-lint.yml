@@ -1,0 +1,32 @@
+name: PHP Code Quality
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.2'
+        extensions: json, mbstring
+        coverage: none
+
+    - name: Check Syntax (Lint)
+      run: |
+        # Recursively check all PHP files for syntax errors
+        find src/server -name "*.php" -exec php -l {} \;
+
+    - name: Verify Environment Template
+      run: |
+        # Ensure the .env.example file exists for other developers
+        test -f .env.example && echo ".env.example exists" || exit 1
