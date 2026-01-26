@@ -31,7 +31,7 @@ This project serves as a technical demonstration of a secure, production-ready p
 
 ## 📦 Installation & Setup
 1. **Clone the repo**:  
-   `git clone https://github.com/your-username/payment-integration-demo`
+   `git clone https://github.com/vik-op/Payment-Integration-System-Demo-Google-Pay-Backend-Security`
 2. **Environment**:  
    Copy `.env.example` to `.env` and add your Gateway Secret Keys.
 3. **Mocking Webhooks**:  
